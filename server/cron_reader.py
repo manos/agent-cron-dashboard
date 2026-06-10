@@ -15,11 +15,67 @@ from typing import Any
 from croniter import croniter
 
 
-def read_jobs(cron_dir: str) -> list[dict]:
+def _resolve_state_db(explicit: str | None, cron_dir: str) -> str | None:
     """
-    Read and enrich all jobs from jobs.json.
-    Returns an empty list if the file doesn't exist or can't be parsed.
+    Resolve the SQLite state database path.
+
+    Priority:
+      1. ``explicit`` (from ``OPENCLAW_STATE_DB`` env var) — used if the file exists
+      2. Auto-detect: standard OpenClaw layout keeps ``cron/`` and ``state/`` as
+         siblings under ``~/.openclaw/``.  We walk up one level from ``cron_dir``
+         and look for ``state/openclaw.sqlite``.
+      3. ``None`` — fall back to legacy ``jobs.json``
     """
+    candidate = explicit or os.path.normpath(
+        os.path.join(cron_dir, "..", "state", "openclaw.sqlite")
+    )
+    return candidate if os.path.exists(candidate) else None
+
+
+def _read_jobs_sqlite(db_path: str) -> list[dict]:
+    """
+    Read all jobs from the OpenClaw SQLite state database.
+    Each row has a ``job_json`` column with the complete job object.
+    """
+    import sqlite3 as _sqlite3
+
+    try:
+        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = _sqlite3.Row
+        rows = conn.execute(
+            "SELECT job_json FROM cron_jobs ORDER BY sort_order, created_at_ms"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[cron_reader] Failed to read SQLite ({db_path}): {e}")
+        return []
+
+    jobs: list[dict] = []
+    for row in rows:
+        try:
+            jobs.append(json.loads(row["job_json"]))
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return [_enrich_job(job) for job in jobs]
+
+
+def read_jobs(cron_dir: str, state_db: str | None = None) -> list[dict]:
+    """
+    Read and enrich all jobs.
+
+    Tries the SQLite state database first (OpenClaw ≥ 0.x stores jobs there).
+    Falls back to the legacy ``jobs.json`` file for older installations.
+
+    Args:
+        cron_dir:  Path to the OpenClaw cron directory (``OPENCLAW_CRON_DIR``).
+        state_db:  Explicit path to ``openclaw.sqlite`` (``OPENCLAW_STATE_DB``).
+                   When omitted, auto-detected from ``cron_dir/../state/``.
+    """
+    db_path = _resolve_state_db(state_db, cron_dir)
+    if db_path:
+        return _read_jobs_sqlite(db_path)
+
+    # ── Legacy fallback: jobs.json ──────────────────────────────────────────
     jobs_path = os.path.join(cron_dir, "jobs.json")
 
     if not os.path.exists(jobs_path):
@@ -291,13 +347,17 @@ def _compute_cron_fractions(expr: str | None, tz: str | None) -> list[float]:
     try:
         import zoneinfo
 
-        # Server local timezone for output fractions
-        server_tz = datetime.now().astimezone().tzinfo
+        # Always output fractions in UTC so the frontend can convert to
+        # browser-local time consistently, regardless of server timezone.
+        # Use datetime.timezone.utc (built-in, never affected by system tzdata)
+        # instead of ZoneInfo("UTC") which resolves incorrectly on some hosts.
+        from datetime import timezone as _tz
+        server_tz = _tz.utc
         server_now = datetime.now(server_tz)
         server_midnight = server_now.replace(hour=0, minute=0, second=0, microsecond=0)
         server_end = server_midnight + timedelta(days=1)
 
-        # Iterate cron in the JOB's timezone (or server tz if none)
+        # Iterate cron in the JOB's timezone (or UTC if none)
         if tz:
             try:
                 job_tz = zoneinfo.ZoneInfo(tz)
@@ -408,8 +468,11 @@ def _compute_weekly_cron_fractions(
         import zoneinfo
         from datetime import date as _date
 
-        # Server local timezone for output fractions
-        server_tz = datetime.now().astimezone().tzinfo
+        # Always output fractions in UTC so the frontend can convert to
+        # browser-local time consistently, regardless of server timezone.
+        # Use datetime.timezone.utc (built-in, immune to system tzdata issues).
+        from datetime import timezone as _tz
+        server_tz = _tz.utc
 
         today = _date.today()
         monday = today - timedelta(days=today.weekday())
@@ -443,7 +506,7 @@ def _compute_weekly_cron_fractions(
             # Server midnight for this day (for fraction calc)
             server_day_midnight = datetime(
                 day_date.year, day_date.month, day_date.day,
-                0, 0, 0, tzinfo=server_tz,
+                0, 0, 0, tzinfo=_tz.utc,
             )
 
             fractions: list[float] = []

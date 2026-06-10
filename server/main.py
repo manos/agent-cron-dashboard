@@ -26,6 +26,8 @@ from .run_history import get_run_history
 PORT = int(os.environ.get("PORT", "3000"))
 CRON_DIR = os.environ.get("OPENCLAW_CRON_DIR", "/data/cron")
 OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", "openclaw")
+# Explicit path to openclaw.sqlite; auto-detected from OPENCLAW_CRON_DIR/../state/ when absent
+STATE_DB = os.environ.get("OPENCLAW_STATE_DB", "/data/state/openclaw.sqlite") or None
 
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "..", "public")
 
@@ -45,13 +47,12 @@ app.add_middleware(
 )
 
 
-# No-cache for static assets so code updates take effect immediately
+# No-cache for all responses — API data changes live, static assets should always be fresh
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        if not request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
         return response
 
 
@@ -66,11 +67,15 @@ def health():
     """Simple health check. Returns service status and config paths."""
     import time
 
+    from .cron_reader import _resolve_state_db
+    resolved_db = _resolve_state_db(STATE_DB, CRON_DIR)
+
     return {
         "status": "ok",
         "version": "1.0.0",
         "config": {
             "cronDir": CRON_DIR,
+            "stateDb": resolved_db,
             "openclawBin": OPENCLAW_BIN,
         },
         "timestamp": int(time.time() * 1000),
@@ -86,7 +91,7 @@ def jobs():
     import time
 
     try:
-        job_list = read_jobs(CRON_DIR)
+        job_list = read_jobs(CRON_DIR, state_db=STATE_DB)
         return {
             "jobs": job_list,
             "count": len(job_list),
@@ -104,7 +109,7 @@ def job_runs(job_id: str, limit: int = Query(default=50, le=200, ge=1)):
     Shells out to: openclaw cron runs --id <job_id>
     """
     try:
-        entries, error = get_run_history(job_id, CRON_DIR, OPENCLAW_BIN, limit)
+        entries, error = get_run_history(job_id, CRON_DIR, OPENCLAW_BIN, limit, state_db=STATE_DB)
 
         return {
             "entries": entries,
@@ -151,59 +156,86 @@ def weekly_runs():
     days = [(monday + timedelta(days=i)).isoformat() for i in range(7)]
     days_set = set(days)
 
-    runs_dir = Path(CRON_DIR) / "runs"
     jobs_data: dict[str, dict[str, list[dict]]] = {}
 
-    if runs_dir.exists():
+    from .run_history import _resolve_state_db
+    db_path = _resolve_state_db(STATE_DB, CRON_DIR)
+
+    if db_path:
+        # ── SQLite path ────────────────────────────────────────────────────
+        import sqlite3 as _sqlite3
         try:
-            for run_file in runs_dir.iterdir():
-                if run_file.suffix != ".jsonl":
+            conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute(
+                "SELECT job_id, ts, status, duration_ms, summary "
+                "FROM cron_run_logs WHERE ts >= ? ORDER BY ts DESC",
+                (cutoff_ms,),
+            ).fetchall()
+            conn.close()
+
+            for row in rows:
+                ts = row["ts"]
+                job_id = row["job_id"]
+                day = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                if day not in days_set:
                     continue
-                try:
-                    with open(run_file) as f:
-                        for line in f:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
+                jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
+                    "status": row["status"],
+                    "ts": ts,
+                    "durationMs": row["duration_ms"],
+                    "summary": (row["summary"] or "")[:200],
+                })
+        except Exception:
+            pass  # fall through to JSONL below
 
-                            ts = entry.get("ts") or entry.get("runAtMs")
-                            if not ts or ts < cutoff_ms:
-                                continue
+    if not jobs_data:
+        # ── Legacy fallback: JSONL run files ────────────────────────────────
+        runs_dir = Path(CRON_DIR) / "runs"
+        if runs_dir.exists():
+            try:
+                for run_file in runs_dir.iterdir():
+                    if run_file.suffix != ".jsonl":
+                        continue
+                    try:
+                        with open(run_file) as f:
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    entry = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
 
-                            job_id = entry.get("jobId")
-                            if not job_id:
-                                continue
+                                ts = entry.get("ts") or entry.get("runAtMs")
+                                if not ts or ts < cutoff_ms:
+                                    continue
 
-                            day = datetime.fromtimestamp(
-                                ts / 1000, tz=timezone.utc
-                            ).strftime("%Y-%m-%d")
-                            if day not in days_set:
-                                continue
+                                job_id = entry.get("jobId")
+                                if not job_id:
+                                    continue
 
-                            if job_id not in jobs_data:
-                                jobs_data[job_id] = {}
-                            if day not in jobs_data[job_id]:
-                                jobs_data[job_id][day] = []
+                                day = datetime.fromtimestamp(
+                                    ts / 1000, tz=timezone.utc
+                                ).strftime("%Y-%m-%d")
+                                if day not in days_set:
+                                    continue
 
-                            # Truncate summary for tooltip display
-                            summary = entry.get("summary") or ""
-                            if len(summary) > 200:
-                                summary = summary[:200] + "…"
+                                summary = entry.get("summary") or ""
+                                if len(summary) > 200:
+                                    summary = summary[:200] + "…"
 
-                            jobs_data[job_id][day].append({
-                                "status": entry.get("status"),
-                                "ts": ts,
-                                "durationMs": entry.get("durationMs"),
-                                "summary": summary,
-                            })
-                except (OSError, PermissionError):
-                    continue
-        except (OSError, PermissionError):
-            pass
+                                jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
+                                    "status": entry.get("status"),
+                                    "ts": ts,
+                                    "durationMs": entry.get("durationMs"),
+                                    "summary": summary,
+                                })
+                    except (OSError, PermissionError):
+                        continue
+            except (OSError, PermissionError):
+                pass
 
     return {"days": days, "jobs": jobs_data}
 

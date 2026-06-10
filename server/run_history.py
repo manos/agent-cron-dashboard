@@ -16,19 +16,71 @@ from pathlib import Path
 _VALID_JOB_ID = re.compile(r"^[a-zA-Z0-9-]+$")
 
 
+def _resolve_state_db(explicit: str | None, cron_dir: str) -> str | None:
+    """Mirror of cron_reader._resolve_state_db — see that module for details."""
+    candidate = explicit or os.path.normpath(
+        os.path.join(cron_dir, "..", "state", "openclaw.sqlite")
+    )
+    return candidate if os.path.exists(candidate) else None
+
+
+def _get_run_history_sqlite(
+    job_id: str,
+    db_path: str,
+    limit: int,
+) -> tuple[list[dict], str | None]:
+    """
+    Fetch run history from the OpenClaw SQLite state database.
+    Uses the ``cron_run_logs`` table; each row has an ``entry_json`` column.
+    """
+    import sqlite3 as _sqlite3
+
+    try:
+        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = _sqlite3.Row
+        rows = conn.execute(
+            "SELECT entry_json FROM cron_run_logs "
+            "WHERE job_id = ? ORDER BY ts DESC LIMIT ?",
+            (job_id, limit),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return [], f"SQLite read error: {e}"
+
+    entries: list[dict] = []
+    for row in rows:
+        try:
+            entries.append(json.loads(row["entry_json"]))
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    return [_normalize_entry(e) for e in entries], None
+
+
 def get_run_history(
     job_id: str,
     cron_dir: str = "/data/cron",
     openclaw_bin: str = "openclaw",
     limit: int = 50,
+    state_db: str | None = None,
 ) -> tuple[list[dict], str | None]:
     """
     Fetch run history for a given job ID.
-    Reads directly from JSONL run files in the cron directory.
+
+    Tries the SQLite state database first (OpenClaw ≥ 0.x).  Falls back to
+    reading the legacy JSONL run files in ``cron_dir/runs/``.
+
+    Args:
+        job_id:      Cron job ID (UUID-like string).
+        cron_dir:    Path to the OpenClaw cron directory (``OPENCLAW_CRON_DIR``).
+        openclaw_bin: Unused; kept for backward compatibility.
+        limit:       Maximum number of entries to return.
+        state_db:    Explicit path to ``openclaw.sqlite`` (``OPENCLAW_STATE_DB``).
+                     Auto-detected from ``cron_dir/../state/`` when omitted.
 
     Returns:
-        (entries, error) — entries is a list of normalized run dicts,
-        error is a string message or None.
+        ``(entries, error)`` — entries is a list of normalised run dicts;
+        error is a human-readable string or ``None``.
     """
     if not job_id or not isinstance(job_id, str):
         return [], "Invalid job ID"
@@ -36,19 +88,23 @@ def get_run_history(
     if not _VALID_JOB_ID.match(job_id):
         return [], "Invalid job ID format"
 
+    db_path = _resolve_state_db(state_db, cron_dir)
+    if db_path:
+        return _get_run_history_sqlite(job_id, db_path, limit)
+
+    # ── Legacy fallback: JSONL run files ──────────────────────────────────
     runs_dir = Path(cron_dir) / "runs"
     if not runs_dir.exists():
         return [], None
 
-    # Collect all run entries for this job from all JSONL files
     entries: list[dict] = []
 
     try:
         for run_file in runs_dir.iterdir():
-            if not run_file.suffix == ".jsonl":
+            if run_file.suffix != ".jsonl":
                 continue
             try:
-                with open(run_file, "r") as f:
+                with open(run_file) as f:
                     for line in f:
                         line = line.strip()
                         if not line:
@@ -64,13 +120,8 @@ def get_run_history(
     except (OSError, PermissionError) as e:
         return [], f"Cannot read runs directory: {e}"
 
-    # Sort by timestamp descending (most recent first)
     entries.sort(key=lambda e: e.get("ts", 0), reverse=True)
-
-    # Normalize and limit
-    normalized = [_normalize_entry(e) for e in entries[:limit]]
-
-    return normalized, None
+    return [_normalize_entry(e) for e in entries[:limit]], None
 
 
 def _normalize_entry(entry: dict) -> dict:

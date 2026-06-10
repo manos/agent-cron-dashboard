@@ -2,15 +2,14 @@
 #
 # Usage:
 #   1. Copy this file to your working directory
-#   2. Adjust the volume mount to point to your ~/.openclaw/cron directory
-#   3. If the openclaw binary is available on the host, bind-mount it (see below)
-#   4. Run: docker compose up -d
+#   2. Adjust the volume mounts to point to your ~/.openclaw directories
+#   3. Run: docker compose up -d
 #
 # The dashboard will be available at http://localhost:3000
 
 services:
   cron-dashboard:
-    image: ghcr.io/your-org/openclaw-cron-dashboard:latest
+    image: ghcr.io/manos/openclaw-cron-dashboard:latest
     # Or build locally:
     # build: .
     container_name: openclaw-cron-dashboard
@@ -18,23 +17,23 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Path inside the container where cron data is mounted
+      # Path inside the container where the OpenClaw cron directory is mounted
       OPENCLAW_CRON_DIR: /data/cron
 
-      # Path to the openclaw binary inside the container.
-      # If you bind-mount the host binary (see volumes below), set this path.
-      # If openclaw is not available, run history will return empty results.
-      OPENCLAW_BIN: /usr/local/bin/openclaw
+      # Path inside the container where the OpenClaw SQLite state DB is mounted.
+      # The dashboard reads job list and run history directly from SQLite
+      # (no token, no API, no binary required).
+      OPENCLAW_STATE_DB: /data/state/openclaw.sqlite
 
       PORT: "3000"
     volumes:
       # Mount your OpenClaw cron directory (read-only)
-      # Replace ~/.openclaw/cron with the actual path on your host
+      # Used for backward compatibility; the state DB is preferred when present
       - ${HOME}/.openclaw/cron:/data/cron:ro
 
-      # Optional: bind-mount the openclaw binary so run history works
-      # Uncomment and adjust the path to your openclaw installation:
-      # - /usr/local/bin/openclaw:/usr/local/bin/openclaw:ro
+      # Mount your OpenClaw state directory (read-only)
+      # Contains openclaw.sqlite with jobs and run history
+      - ${HOME}/.openclaw/state:/data/state:ro
 
     # Resource limits (optional, adjust to taste)
     # deploy:
