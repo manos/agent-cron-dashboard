@@ -40,7 +40,7 @@ def _read_jobs_sqlite(db_path: str) -> list[dict]:
     import sqlite3 as _sqlite3
 
     try:
-        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = _sqlite3.Row
         # Column name varies across OpenClaw schema versions — some builds
         # have `created_at_ms`, others only `updated_at`/`runtime_updated_at_ms`.

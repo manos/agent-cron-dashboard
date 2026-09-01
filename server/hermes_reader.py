@@ -197,7 +197,15 @@ def get_run_history(
         return [], None
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # immutable=1 (not just mode=ro): the DB may be on a read-only bind
+        # mount (Docker :ro volume). Plain mode=ro still tries to take a
+        # SHARED lock / probe for a hot journal, which needs write access to
+        # the *directory* — that fails with "unable to open database file"
+        # on a read-only mount even though the .db file itself is readable.
+        # immutable=1 tells SQLite the file won't change underneath us and
+        # skips all locking. Found live 2026-09-01: dashboard container had
+        # the mount read-only and every Hermes run-history query 500'd.
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM executions WHERE job_id = ? "
@@ -289,7 +297,7 @@ def get_weekly_runs(cron_dir: str, cutoff_ms: int, days_set: set[str]) -> dict[s
         return jobs_data
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM executions WHERE claimed_at IS NOT NULL "
