@@ -90,8 +90,10 @@ All configuration is via environment variables:
 | `OPENCLAW_STATE_DB` | `/data/state/openclaw.sqlite` | Path to OpenClaw's SQLite state database. **Primary OpenClaw data source.** Auto-detected from `OPENCLAW_CRON_DIR/../state/` when not set. |
 | `OPENCLAW_CRON_DIR` | `/data/cron` | Path to the OpenClaw cron directory. Used as a fallback for legacy `jobs.json` and JSONL run files when SQLite is unavailable. |
 | `HERMES_CRON_DIR` | `/data/hermes-cron` | Path to a Hermes Agent cron directory (`~/.hermes/cron`), containing `jobs.json` and `executions.db`. Auto-detected as absent if the path doesn't exist or doesn't look like a Hermes cron dir — safe to leave at the default if you don't run Hermes. |
+| `OPENCLAW_ENABLED` | `true` | Set to `false` to hide the OpenClaw backend entirely — e.g. for a Hermes-only dashboard even if OpenClaw data is still mounted. |
+| `HERMES_ENABLED` | `true` | Set to `false` to hide the Hermes backend entirely. |
 
-Set only the variables for the backend(s) you actually run. Both can be set at once — their jobs are merged.
+Set only the variables for the backend(s) you actually run. Both can be set at once — their jobs are merged. To go Hermes-only (or OpenClaw-only) without touching mounts, just set the other backend's `*_ENABLED` to `false`.
 
 ## Volume Mounts
 

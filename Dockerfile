@@ -37,12 +37,16 @@ USER dashboard
 # Override these at runtime:
 #   docker run -e OPENCLAW_CRON_DIR=/data/cron \
 #              -e OPENCLAW_BIN=openclaw \
+#              -e OPENCLAW_ENABLED=true \
 #              -e HERMES_CRON_DIR=/data/hermes-cron \
+#              -e HERMES_ENABLED=true \
 #              -e PORT=3000 ...
 ENV PORT=3000 \
     OPENCLAW_CRON_DIR=/data/cron \
     OPENCLAW_BIN=openclaw \
-    HERMES_CRON_DIR=/data/hermes-cron
+    OPENCLAW_ENABLED=true \
+    HERMES_CRON_DIR=/data/hermes-cron \
+    HERMES_ENABLED=true
 
 EXPOSE 3000
 

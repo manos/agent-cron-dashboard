@@ -40,6 +40,11 @@ services:
       # if you only run OpenClaw, or vice versa.
       HERMES_CRON_DIR: /data/hermes-cron
 
+      # Master on/off switches — set to "false" to hide a backend outright
+      # even if its data is still mounted (e.g. Hermes-only dashboard).
+      OPENCLAW_ENABLED: "true"
+      HERMES_ENABLED: "true"
+
       PORT: "3000"
     volumes:
       # ── OpenClaw ──

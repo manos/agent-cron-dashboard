@@ -9,12 +9,17 @@ Environment variables:
     OPENCLAW_CRON_DIR  - Path to OpenClaw cron directory (default: /data/cron)
     OPENCLAW_BIN       - Path to openclaw binary (default: openclaw)
     OPENCLAW_STATE_DB  - Path to openclaw.sqlite (auto-detected if unset)
+    OPENCLAW_ENABLED   - Set to "false"/"0" to hide the OpenClaw backend
+                          entirely, even if OPENCLAW_CRON_DIR/STATE_DB
+                          resolve to real data. Default: "true".
     HERMES_CRON_DIR    - Path to a Hermes Agent cron directory
                           (~/.hermes/cron), default: /data/hermes-cron.
                           Auto-detected as absent if it doesn't look like
                           a Hermes cron dir (no jobs.json in that shape).
                           Jobs/runs from this backend are merged with
                           OpenClaw's — set only one, or both, or neither.
+    HERMES_ENABLED     - Set to "false"/"0" to hide the Hermes backend
+                          entirely. Default: "true".
 """
 
 import os
@@ -31,16 +36,31 @@ from .cron_reader import read_jobs
 from .run_history import get_run_history
 from . import hermes_reader
 
+
+def _flag_enabled(env_name: str, default: bool = True) -> bool:
+    """Parse a boolean env var ('false'/'0'/'no'/'off' => False, else default)."""
+    raw = os.environ.get(env_name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("false", "0", "no", "off", "")
+
+
 PORT = int(os.environ.get("PORT", "3000"))
 CRON_DIR = os.environ.get("OPENCLAW_CRON_DIR", "/data/cron")
 OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", "openclaw")
 # Explicit path to openclaw.sqlite; auto-detected from OPENCLAW_CRON_DIR/../state/ when absent
 STATE_DB = os.environ.get("OPENCLAW_STATE_DB", "/data/state/openclaw.sqlite") or None
+# Master on/off switch for the OpenClaw backend — set OPENCLAW_ENABLED=false
+# to run a Hermes-only dashboard even when OpenClaw data is still mounted.
+OPENCLAW_ENABLED = _flag_enabled("OPENCLAW_ENABLED", default=True)
 # Optional second cron dir for a Hermes Agent install (~/.hermes/cron). When
 # set (or auto-detected — see _detect_hermes_dir below), jobs/runs from BOTH
 # backends are merged so one dashboard can watch an OpenClaw AND a Hermes
 # instance side by side.
 HERMES_CRON_DIR = os.environ.get("HERMES_CRON_DIR", "/data/hermes-cron")
+# Master on/off switch for the Hermes backend — set HERMES_ENABLED=false to
+# hide it (e.g. for an OpenClaw-only dashboard).
+HERMES_ENABLED = _flag_enabled("HERMES_ENABLED", default=True)
 
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "..", "public")
 
@@ -76,7 +96,9 @@ app.add_middleware(NoCacheStaticMiddleware)
 
 
 def _hermes_dir() -> str | None:
-    """Resolve an active Hermes cron dir, or None if not present/valid."""
+    """Resolve an active Hermes cron dir, or None if disabled/not present/valid."""
+    if not HERMES_ENABLED:
+        return None
     return hermes_reader.detect_hermes_cron_dir(HERMES_CRON_DIR)
 
 
@@ -104,7 +126,9 @@ def health():
             "cronDir": CRON_DIR,
             "stateDb": resolved_db,
             "openclawBin": OPENCLAW_BIN,
+            "openclawEnabled": OPENCLAW_ENABLED,
             "hermesCronDir": hdir,
+            "hermesEnabled": HERMES_ENABLED,
         },
         "timestamp": int(time.time() * 1000),
     }
@@ -120,7 +144,7 @@ def jobs():
     import time
 
     try:
-        job_list = read_jobs(CRON_DIR, state_db=STATE_DB)
+        job_list = read_jobs(CRON_DIR, state_db=STATE_DB) if OPENCLAW_ENABLED else []
     except Exception as e:
         job_list = []
         openclaw_error = str(e)
@@ -154,7 +178,9 @@ def job_runs(job_id: str, limit: int = Query(default=50, le=200, ge=1)):
     if the job isn't known there, falls back to the Hermes backend.
     """
     try:
-        entries, error = get_run_history(job_id, CRON_DIR, OPENCLAW_BIN, limit, state_db=STATE_DB)
+        entries, error = ([], None)
+        if OPENCLAW_ENABLED:
+            entries, error = get_run_history(job_id, CRON_DIR, OPENCLAW_BIN, limit, state_db=STATE_DB)
 
         hdir = _hermes_dir()
         if not entries and hdir and job_id in _job_source_map():
@@ -207,84 +233,85 @@ def weekly_runs():
 
     jobs_data: dict[str, dict[str, list[dict]]] = {}
 
-    from .run_history import _resolve_state_db
-    db_path = _resolve_state_db(STATE_DB, CRON_DIR)
+    if OPENCLAW_ENABLED:
+        from .run_history import _resolve_state_db
+        db_path = _resolve_state_db(STATE_DB, CRON_DIR)
 
-    if db_path:
-        # ── SQLite path ────────────────────────────────────────────────────
-        import sqlite3 as _sqlite3
-        try:
-            conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            conn.row_factory = _sqlite3.Row
-            rows = conn.execute(
-                "SELECT job_id, ts, status, duration_ms, summary "
-                "FROM cron_run_logs WHERE ts >= ? ORDER BY ts DESC",
-                (cutoff_ms,),
-            ).fetchall()
-            conn.close()
-
-            for row in rows:
-                ts = row["ts"]
-                job_id = row["job_id"]
-                day = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-                if day not in days_set:
-                    continue
-                jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
-                    "status": row["status"],
-                    "ts": ts,
-                    "durationMs": row["duration_ms"],
-                    "summary": (row["summary"] or "")[:200],
-                })
-        except Exception:
-            pass  # fall through to JSONL below
-
-    if not jobs_data:
-        # ── Legacy fallback: JSONL run files ────────────────────────────────
-        runs_dir = Path(CRON_DIR) / "runs"
-        if runs_dir.exists():
+        if db_path:
+            # ── SQLite path ────────────────────────────────────────────────
+            import sqlite3 as _sqlite3
             try:
-                for run_file in runs_dir.iterdir():
-                    if run_file.suffix != ".jsonl":
+                conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+                conn.row_factory = _sqlite3.Row
+                rows = conn.execute(
+                    "SELECT job_id, ts, status, duration_ms, summary "
+                    "FROM cron_run_logs WHERE ts >= ? ORDER BY ts DESC",
+                    (cutoff_ms,),
+                ).fetchall()
+                conn.close()
+
+                for row in rows:
+                    ts = row["ts"]
+                    job_id = row["job_id"]
+                    day = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                    if day not in days_set:
                         continue
-                    try:
-                        with open(run_file) as f:
-                            for line in f:
-                                line = line.strip()
-                                if not line:
-                                    continue
-                                try:
-                                    entry = json.loads(line)
-                                except json.JSONDecodeError:
-                                    continue
+                    jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
+                        "status": row["status"],
+                        "ts": ts,
+                        "durationMs": row["duration_ms"],
+                        "summary": (row["summary"] or "")[:200],
+                    })
+            except Exception:
+                pass  # fall through to JSONL below
 
-                                ts = entry.get("ts") or entry.get("runAtMs")
-                                if not ts or ts < cutoff_ms:
-                                    continue
+        if not jobs_data:
+            # ── Legacy fallback: JSONL run files ────────────────────────────
+            runs_dir = Path(CRON_DIR) / "runs"
+            if runs_dir.exists():
+                try:
+                    for run_file in runs_dir.iterdir():
+                        if run_file.suffix != ".jsonl":
+                            continue
+                        try:
+                            with open(run_file) as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if not line:
+                                        continue
+                                    try:
+                                        entry = json.loads(line)
+                                    except json.JSONDecodeError:
+                                        continue
 
-                                job_id = entry.get("jobId")
-                                if not job_id:
-                                    continue
+                                    ts = entry.get("ts") or entry.get("runAtMs")
+                                    if not ts or ts < cutoff_ms:
+                                        continue
 
-                                day = datetime.fromtimestamp(
-                                    ts / 1000, tz=timezone.utc
-                                ).strftime("%Y-%m-%d")
-                                if day not in days_set:
-                                    continue
+                                    job_id = entry.get("jobId")
+                                    if not job_id:
+                                        continue
 
-                                summary = entry.get("summary") or ""
-                                if len(summary) > 200:
-                                    summary = summary[:200] + "…"
+                                    day = datetime.fromtimestamp(
+                                        ts / 1000, tz=timezone.utc
+                                    ).strftime("%Y-%m-%d")
+                                    if day not in days_set:
+                                        continue
 
-                                jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
-                                    "status": entry.get("status"),
-                                    "ts": ts,
-                                    "durationMs": entry.get("durationMs"),
-                                    "summary": summary,
-                                })
-                    except (OSError, PermissionError):
-                        continue
-            except (OSError, PermissionError):
-                pass
+                                    summary = entry.get("summary") or ""
+                                    if len(summary) > 200:
+                                        summary = summary[:200] + "…"
+
+                                    jobs_data.setdefault(job_id, {}).setdefault(day, []).append({
+                                        "status": entry.get("status"),
+                                        "ts": ts,
+                                        "durationMs": entry.get("durationMs"),
+                                        "summary": summary,
+                                    })
+                        except (OSError, PermissionError):
+                            continue
+                except (OSError, PermissionError):
+                    pass
 
     # ── Merge in Hermes executions.db, if a Hermes cron dir is present ─────
     hdir = _hermes_dir()
