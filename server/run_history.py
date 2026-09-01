@@ -32,6 +32,17 @@ def _get_run_history_sqlite(
     """
     Fetch run history from the OpenClaw SQLite state database.
     Uses the ``cron_run_logs`` table; each row has an ``entry_json`` column.
+
+    KNOWN SCHEMA DRIFT (found 2026-09-01, unverified fix): some OpenClaw
+    versions don't have a ``cron_run_logs`` table at all — the closest
+    analog observed was ``cron_run_receipts`` (columns: receipt_id, job_id,
+    status, started_at_ms, finished_at_ms, error_text — no entry_json), but
+    it was empty on the install where this was found, so there was no live
+    data to confirm it's really the successor table vs. a short-lived
+    lock/receipt record that gets cleared. Left unpatched rather than
+    guess-fixing against untested data. If you hit this on a live OpenClaw
+    install with real cron history, `PRAGMA table_info` your `cron_run_logs`
+    equivalent and either add a compat branch here or open an issue.
     """
     import sqlite3 as _sqlite3
 

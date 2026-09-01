@@ -42,8 +42,17 @@ def _read_jobs_sqlite(db_path: str) -> list[dict]:
     try:
         conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = _sqlite3.Row
+        # Column name varies across OpenClaw schema versions — some builds
+        # have `created_at_ms`, others only `updated_at`/`runtime_updated_at_ms`.
+        # Detect which ordering column actually exists rather than hardcoding
+        # one and silently returning zero jobs when it doesn't (caught on a
+        # real install 2026-09-01: newer schema has no `created_at_ms` at all).
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(cron_jobs)")}
+        order_col = "created_at_ms" if "created_at_ms" in cols else (
+            "runtime_updated_at_ms" if "runtime_updated_at_ms" in cols else "updated_at"
+        )
         rows = conn.execute(
-            "SELECT job_json FROM cron_jobs ORDER BY sort_order, created_at_ms"
+            f"SELECT job_json FROM cron_jobs ORDER BY sort_order, {order_col}"
         ).fetchall()
         conn.close()
     except Exception as e:

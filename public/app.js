@@ -1,9 +1,10 @@
 /**
- * OpenClaw Cron Dashboard — Frontend
+ * Agent Cron Dashboard — Frontend
  *
  * Fetches job data from the local API, renders a 24h timeline,
  * job cards, and a run history panel with output summaries.
- * Auto-refreshes every 30 seconds.
+ * Auto-refreshes every 30 seconds. Works against an OpenClaw
+ * install, a Hermes Agent install, or both merged together.
  */
 
 'use strict';

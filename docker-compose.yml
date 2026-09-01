@@ -1,22 +1,28 @@
-# OpenClaw Cron Dashboard — example Docker Compose configuration
+# Agent Cron Dashboard — example Docker Compose configuration
+#
+# Works against OpenClaw, Hermes Agent, or both at once — set whichever
+# volume mounts / env vars apply to your setup and leave the rest at
+# their defaults (an absent/invalid path is auto-detected and skipped).
 #
 # Usage:
 #   1. Copy this file to your working directory
-#   2. Adjust the volume mounts to point to your ~/.openclaw directories
+#   2. Adjust the volume mounts to point to your ~/.openclaw and/or
+#      ~/.hermes directories
 #   3. Run: docker compose up -d
 #
 # The dashboard will be available at http://localhost:3000
 
 services:
   cron-dashboard:
-    image: ghcr.io/manos/openclaw-cron-dashboard:latest
+    image: ghcr.io/manos/agent-cron-dashboard:latest
     # Or build locally:
     # build: .
-    container_name: openclaw-cron-dashboard
+    container_name: agent-cron-dashboard
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
+      # ── OpenClaw ──
       # Path inside the container where the OpenClaw cron directory is mounted
       OPENCLAW_CRON_DIR: /data/cron
 
@@ -25,8 +31,18 @@ services:
       # (no token, no API, no binary required).
       OPENCLAW_STATE_DB: /data/state/openclaw.sqlite
 
+      # ── Hermes Agent ──
+      # Path inside the container where a Hermes Agent cron directory
+      # (~/.hermes/cron) is mounted. Reads jobs.json + executions.db
+      # directly, no token/API/binary required. Jobs from this backend
+      # are merged with OpenClaw's on one dashboard. Leave the volume
+      # mount commented out (and this pointed at an empty/missing dir)
+      # if you only run OpenClaw, or vice versa.
+      HERMES_CRON_DIR: /data/hermes-cron
+
       PORT: "3000"
     volumes:
+      # ── OpenClaw ──
       # Mount your OpenClaw cron directory (read-only)
       # Used for backward compatibility; the state DB is preferred when present
       - ${HOME}/.openclaw/cron:/data/cron:ro
@@ -34,6 +50,11 @@ services:
       # Mount your OpenClaw state directory (read-only)
       # Contains openclaw.sqlite with jobs and run history
       - ${HOME}/.openclaw/state:/data/state:ro
+
+      # ── Hermes Agent ──
+      # Mount your Hermes cron directory (read-only). Contains jobs.json,
+      # executions.db, and per-run output/ markdown.
+      - ${HOME}/.hermes/cron:/data/hermes-cron:ro
 
     # Resource limits (optional, adjust to taste)
     # deploy:

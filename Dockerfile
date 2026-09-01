@@ -1,4 +1,4 @@
-# ─── OpenClaw Cron Dashboard ─────────────────────────────────────────────────
+# ─── Agent Cron Dashboard ─────────────────────────────────────────────────
 # Multi-stage build: install dependencies then copy only what's needed.
 
 # ── Stage 1: Install dependencies ─────────────────────────────────────────────
@@ -25,7 +25,7 @@ COPY server/   ./server/
 COPY public/   ./public/
 
 # Mount point for OpenClaw cron data (bind-mount ~/.openclaw/cron here)
-RUN mkdir -p /data/cron && chown dashboard:dashboard /data/cron
+RUN mkdir -p /data/cron /data/hermes-cron && chown dashboard:dashboard /data/cron /data/hermes-cron
 
 # Add deps to Python path
 ENV PYTHONPATH=/app/deps:/app
@@ -37,10 +37,12 @@ USER dashboard
 # Override these at runtime:
 #   docker run -e OPENCLAW_CRON_DIR=/data/cron \
 #              -e OPENCLAW_BIN=openclaw \
+#              -e HERMES_CRON_DIR=/data/hermes-cron \
 #              -e PORT=3000 ...
 ENV PORT=3000 \
     OPENCLAW_CRON_DIR=/data/cron \
-    OPENCLAW_BIN=openclaw
+    OPENCLAW_BIN=openclaw \
+    HERMES_CRON_DIR=/data/hermes-cron
 
 EXPOSE 3000
 

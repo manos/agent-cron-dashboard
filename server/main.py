@@ -1,13 +1,20 @@
 """
-OpenClaw Cron Dashboard — Server
+Agent Cron Dashboard — Server
 
-A lightweight FastAPI server that exposes OpenClaw cron job data
-via a simple REST API and serves the static frontend.
+A lightweight FastAPI server that exposes OpenClaw and/or Hermes Agent
+cron job data via a simple REST API and serves the static frontend.
 
 Environment variables:
-    PORT              - HTTP port (default: 3000)
-    OPENCLAW_CRON_DIR - Path to OpenClaw cron directory (default: /data/cron)
-    OPENCLAW_BIN      - Path to openclaw binary (default: openclaw)
+    PORT               - HTTP port (default: 3000)
+    OPENCLAW_CRON_DIR  - Path to OpenClaw cron directory (default: /data/cron)
+    OPENCLAW_BIN       - Path to openclaw binary (default: openclaw)
+    OPENCLAW_STATE_DB  - Path to openclaw.sqlite (auto-detected if unset)
+    HERMES_CRON_DIR    - Path to a Hermes Agent cron directory
+                          (~/.hermes/cron), default: /data/hermes-cron.
+                          Auto-detected as absent if it doesn't look like
+                          a Hermes cron dir (no jobs.json in that shape).
+                          Jobs/runs from this backend are merged with
+                          OpenClaw's — set only one, or both, or neither.
 """
 
 import os
@@ -22,18 +29,24 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .cron_reader import read_jobs
 from .run_history import get_run_history
+from . import hermes_reader
 
 PORT = int(os.environ.get("PORT", "3000"))
 CRON_DIR = os.environ.get("OPENCLAW_CRON_DIR", "/data/cron")
 OPENCLAW_BIN = os.environ.get("OPENCLAW_BIN", "openclaw")
 # Explicit path to openclaw.sqlite; auto-detected from OPENCLAW_CRON_DIR/../state/ when absent
 STATE_DB = os.environ.get("OPENCLAW_STATE_DB", "/data/state/openclaw.sqlite") or None
+# Optional second cron dir for a Hermes Agent install (~/.hermes/cron). When
+# set (or auto-detected — see _detect_hermes_dir below), jobs/runs from BOTH
+# backends are merged so one dashboard can watch an OpenClaw AND a Hermes
+# instance side by side.
+HERMES_CRON_DIR = os.environ.get("HERMES_CRON_DIR", "/data/hermes-cron")
 
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "..", "public")
 
 app = FastAPI(
-    title="OpenClaw Cron Dashboard",
-    version="1.0.0",
+    title="Agent Cron Dashboard",
+    version="1.1.0",
     docs_url=None,  # disable Swagger UI in production
     redoc_url=None,
 )
@@ -62,6 +75,19 @@ app.add_middleware(NoCacheStaticMiddleware)
 # ─── API Routes ────────────────────────────────────────────────────────────────
 
 
+def _hermes_dir() -> str | None:
+    """Resolve an active Hermes cron dir, or None if not present/valid."""
+    return hermes_reader.detect_hermes_cron_dir(HERMES_CRON_DIR)
+
+
+def _job_source_map() -> dict[str, str]:
+    """Map job_id -> 'hermes' for every Hermes job (used to route by-id routes)."""
+    hdir = _hermes_dir()
+    if not hdir:
+        return {}
+    return {j["id"]: "hermes" for j in hermes_reader.read_jobs(hdir) if j.get("id")}
+
+
 @app.get("/api/health")
 def health():
     """Simple health check. Returns service status and config paths."""
@@ -69,14 +95,16 @@ def health():
 
     from .cron_reader import _resolve_state_db
     resolved_db = _resolve_state_db(STATE_DB, CRON_DIR)
+    hdir = _hermes_dir()
 
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "config": {
             "cronDir": CRON_DIR,
             "stateDb": resolved_db,
             "openclawBin": OPENCLAW_BIN,
+            "hermesCronDir": hdir,
         },
         "timestamp": int(time.time() * 1000),
     }
@@ -86,30 +114,51 @@ def health():
 def jobs():
     """
     All cron jobs with enriched schedule info and current state.
-    Reads directly from jobs.json — no CLI invocation needed.
+    Merges OpenClaw (SQLite/jobs.json) and Hermes (~/.hermes/cron) jobs
+    when both are present so one dashboard covers either or both agents.
     """
     import time
 
     try:
         job_list = read_jobs(CRON_DIR, state_db=STATE_DB)
-        return {
-            "jobs": job_list,
-            "count": len(job_list),
-            "serverTime": int(time.time() * 1000),
-            "serverTz": _get_server_tz(),
-        }
     except Exception as e:
-        return {"error": "Failed to read jobs", "message": str(e)}
+        job_list = []
+        openclaw_error = str(e)
+    else:
+        openclaw_error = None
+
+    hdir = _hermes_dir()
+    hermes_jobs = []
+    if hdir:
+        try:
+            hermes_jobs = hermes_reader.read_jobs(hdir)
+        except Exception as e:
+            print(f"[main] Failed to read Hermes jobs: {e}")
+
+    all_jobs = job_list + hermes_jobs
+    if not all_jobs and openclaw_error:
+        return {"error": "Failed to read jobs", "message": openclaw_error}
+
+    return {
+        "jobs": all_jobs,
+        "count": len(all_jobs),
+        "serverTime": int(time.time() * 1000),
+        "serverTz": _get_server_tz(),
+    }
 
 
 @app.get("/api/jobs/{job_id}/runs")
 def job_runs(job_id: str, limit: int = Query(default=50, le=200, ge=1)):
     """
-    Run history for a specific job.
-    Shells out to: openclaw cron runs --id <job_id>
+    Run history for a specific job. Tries the OpenClaw backend first;
+    if the job isn't known there, falls back to the Hermes backend.
     """
     try:
         entries, error = get_run_history(job_id, CRON_DIR, OPENCLAW_BIN, limit, state_db=STATE_DB)
+
+        hdir = _hermes_dir()
+        if not entries and hdir and job_id in _job_source_map():
+            entries, error = hermes_reader.get_run_history(job_id, hdir, limit)
 
         return {
             "entries": entries,
@@ -236,6 +285,18 @@ def weekly_runs():
                         continue
             except (OSError, PermissionError):
                 pass
+
+    # ── Merge in Hermes executions.db, if a Hermes cron dir is present ─────
+    hdir = _hermes_dir()
+    if hdir:
+        try:
+            hermes_jobs_data = hermes_reader.get_weekly_runs(hdir, cutoff_ms, days_set)
+            for job_id, by_day in hermes_jobs_data.items():
+                dest = jobs_data.setdefault(job_id, {})
+                for day, entries in by_day.items():
+                    dest.setdefault(day, []).extend(entries)
+        except Exception as e:
+            print(f"[main] Failed to read Hermes weekly runs: {e}")
 
     return {"days": days, "jobs": jobs_data}
 

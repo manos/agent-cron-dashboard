@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenClaw Cron Dashboard</title>
+  <title>Agent Cron Dashboard</title>
   <link rel="stylesheet" href="style.css" />
-  <meta name="description" content="Visualize your OpenClaw cron jobs — schedules, status, run history, and output." />
+  <meta name="description" content="Visualize your OpenClaw and/or Hermes Agent cron jobs — schedules, status, run history, and output." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>🦞</text></svg>" />
 </head>
 <body>
@@ -13,13 +13,13 @@
 
   <!-- ── Header ──────────────────────────────────────────────────────────── -->
   <header class="header">
-    <div class="header-logo" aria-label="OpenClaw Cron Dashboard">
+    <div class="header-logo" aria-label="Agent Cron Dashboard">
       <!-- Claw / schedule icon -->
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="10"/>
         <polyline points="12 6 12 12 16 14"/>
       </svg>
-      <span>OpenClaw</span>
+      <span>Agent</span>
     </div>
     <span class="header-subtitle">Cron Dashboard</span>
 
@@ -126,7 +126,7 @@
           <line x1="3" y1="10" x2="21" y2="10"/>
         </svg>
         <h3>No jobs found</h3>
-        <p>No cron jobs were found in <code id="empty-cron-dir"></code>. Create some jobs with the OpenClaw CLI and they'll appear here.</p>
+        <p>No cron jobs were found in <code id="empty-cron-dir"></code>. Create some jobs with the OpenClaw or Hermes CLI and they'll appear here.</p>
       </div>
 
       <!-- Jobs grid (populated by JS) -->
