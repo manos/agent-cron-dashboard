@@ -259,6 +259,14 @@ def _find_output_summary(output_dir: Path, ts_ms: int | None) -> str | None:
     """
     Best-effort: find the saved output .md file closest to this run's
     timestamp and extract the "## Response" section as the summary.
+
+    If the response is exactly "[SILENT]" (the standard cron convention for
+    "nothing to report, suppress delivery"), that alone is useless in the
+    dashboard -- the whole point of checking here instead of Discord is to
+    see what the underlying script actually found even when nothing was
+    delivered. Fall back to the "## Script Output" block in that case so a
+    silent run still shows real data (e.g. "NONE", or a raw transaction dump)
+    instead of just the literal string "[SILENT]". (Charlie 2026-09-09.)
     """
     if not output_dir.exists() or ts_ms is None:
         return None
@@ -284,6 +292,20 @@ def _find_output_summary(output_dir: Path, ts_ms: int | None) -> str | None:
         if idx == -1:
             return text[:200]
         response = text[idx + len(marker):].strip()
+        if response.strip() == "[SILENT]":
+            script_marker = "## Script Output"
+            s_idx = text.find(script_marker)
+            if s_idx != -1:
+                # Script output is a fenced code block; grab its contents.
+                block = text[s_idx + len(script_marker):idx]
+                fence_start = block.find("```")
+                if fence_start != -1:
+                    fence_end = block.find("```", fence_start + 3)
+                    if fence_end != -1:
+                        script_text = block[fence_start + 3:fence_end].strip()
+                        if script_text:
+                            return f"[SILENT] (script output: {script_text[:180]})"
+            return response[:200]
         return response[:200]
     except Exception:
         return None
