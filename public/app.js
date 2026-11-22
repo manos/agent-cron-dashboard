@@ -968,11 +968,11 @@ function renderJobConfig(job) {
     : '<div class="cfg-null">No prompt (script-only job)</div>';
   return `
     <section class="job-config">
-      <details class="cfg-section" open>
+      <details class="cfg-section">
         <summary>Prompt</summary>
         ${prompt}
       </details>
-      <details class="cfg-section" open>
+      <details class="cfg-section">
         <summary>Configuration <span class="cfg-id">${escHtml(cfg.id || '')}</span></summary>
         ${groups}
       </details>
