@@ -915,6 +915,7 @@ async function openPanel(jobId) {
   try {
     const data = await loadRunHistory(jobId);
     renderRunHistory(data);
+    dom.panelBody.insertAdjacentHTML('afterbegin', renderJobConfig(job));
   } catch (err) {
     dom.panelBody.innerHTML = `
       <div class="panel-error">
@@ -927,6 +928,60 @@ async function openPanel(jobId) {
       </div>
     `;
   }
+}
+
+// ─── Job configuration (prompt + full definition) ────────────────────────────
+
+const CONFIG_GROUPS = [
+  ['What it runs', ['script', 'no_agent', 'skills', 'skill', 'enabled_toolsets', 'workdir', 'context_from',
+                    'monitor_script', 'monitor_url', 'model', 'provider', 'base_url', 'model_snapshot', 'provider_snapshot']],
+  ['Schedule', ['schedule', 'schedule_display', 'repeat', 'enabled', 'state', 'paused_at', 'paused_reason']],
+  ['Delivery', ['deliver', 'failure_deliver', 'origin']],
+  ['Status', ['created_at', 'last_run_at', 'next_run_at', 'last_status', 'last_error', 'last_delivery_error',
+              'last_delivery_unverified', 'failure_streak', 'last_dispatch', 'last_failure', 'fire_claim', 'monitor_state']],
+];
+const CONFIG_SKIP = new Set(['id', 'name', 'prompt']);
+
+function _cfgValue(v) {
+  if (v === null || v === undefined || v === '') return '<span class="cfg-null">—</span>';
+  if (typeof v === 'object') {
+    if (Array.isArray(v) && v.length === 0) return '<span class="cfg-null">[]</span>';
+    return `<pre class="cfg-json">${escHtml(JSON.stringify(v, null, 2))}</pre>`;
+  }
+  return `<code>${escHtml(String(v))}</code>`;
+}
+
+function renderJobConfig(job) {
+  const cfg = job.config;
+  if (!cfg) return '';
+  const seen = new Set(CONFIG_SKIP);
+  const rows = (keys) => keys.filter(k => k in cfg).map(k => { seen.add(k);
+    return `<tr><th>${escHtml(k)}</th><td>${_cfgValue(cfg[k])}</td></tr>`; }).join('');
+  let groups = CONFIG_GROUPS.map(([title, keys]) => {
+    const r = rows(keys);
+    return r ? `<div class="cfg-group-title">${escHtml(title)}</div><table class="cfg-table">${r}</table>` : '';
+  }).join('');
+  const other = Object.keys(cfg).filter(k => !seen.has(k));
+  if (other.length) groups += `<div class="cfg-group-title">Other</div><table class="cfg-table">${rows(other)}</table>`;
+  const prompt = job.prompt
+    ? `<pre class="cfg-prompt">${escHtml(job.prompt)}</pre>`
+    : '<div class="cfg-null">No prompt (script-only job)</div>';
+  return `
+    <section class="job-config">
+      <details class="cfg-section" open>
+        <summary>Prompt</summary>
+        ${prompt}
+      </details>
+      <details class="cfg-section" open>
+        <summary>Configuration <span class="cfg-id">${escHtml(cfg.id || '')}</span></summary>
+        ${groups}
+      </details>
+      <details class="cfg-section">
+        <summary>Raw JSON</summary>
+        <pre class="cfg-json">${escHtml(JSON.stringify(cfg, null, 2))}</pre>
+      </details>
+      <div class="cfg-group-title cfg-runs-title">Run history</div>
+    </section>`;
 }
 
 function closePanel() {

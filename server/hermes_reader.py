@@ -93,6 +93,11 @@ def _enrich_job(job: dict) -> dict:
         "firingFractions": _compute_firing_fractions(schedule),
         "weeklyFiringFractions": compute_weekly_fractions(schedule),
         "model": job.get("model") or job.get("model_snapshot"),
+        "prompt": job.get("prompt"),
+        # Full job definition as stored in jobs.json, so the detail panel can
+        # show exactly how the cron is configured (Charlie 2026-11-21). Runtime
+        # bookkeeping fields stay in; the UI groups them.
+        "config": job,
         "channel": (job.get("origin") or {}).get("platform"),
         "deliveryMode": job.get("deliver"),
         "state": {

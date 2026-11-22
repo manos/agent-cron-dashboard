@@ -915,3 +915,18 @@ code, pre {
   padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0,0,0,0); border: 0;
 }
+
+/* ─── Job configuration section (panel) ─────────────────────────────────── */
+.job-config { margin-bottom: 12px; }
+.cfg-section { border: 1px solid var(--border, #2a2f3a); border-radius: 8px; margin-bottom: 10px; padding: 8px 12px; }
+.cfg-section > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.cfg-id { font-weight: 400; opacity: .6; font-family: monospace; margin-left: 6px; }
+.cfg-prompt, .cfg-json { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45;
+  margin: 8px 0 2px; padding: 8px; border-radius: 6px; background: rgba(127,127,127,.08); max-height: 480px; overflow: auto; }
+.cfg-json { max-height: 260px; margin: 0; }
+.cfg-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .65; margin: 10px 0 4px; }
+.cfg-runs-title { margin-top: 14px; }
+.cfg-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cfg-table th { text-align: left; font-weight: 500; opacity: .75; padding: 3px 10px 3px 0; vertical-align: top; white-space: nowrap; width: 1%; }
+.cfg-table td { padding: 3px 0; word-break: break-word; }
+.cfg-null { opacity: .45; }
